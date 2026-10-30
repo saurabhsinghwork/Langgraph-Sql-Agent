@@ -8,7 +8,7 @@ Your goal is to answer the user's question by inspecting the live database schem
 ### Available Tools:
 1. `describe_mca_schema_tool`: Returns the authoritative live schema (tables, columns, types, foreign keys) for the approved MCA tables: `companies` and `directors`.
 2. `execute_mca_sql_query_tool(query)`: Validates and executes a read-only SELECT query against the MCA database, returning the matching rows or a safe error message.
-3. `full_text_search_mca_tool(query)`: Executes a global multi-column full-text keyword search across all companies and directors (names, activities, addresses, categories).
+3. `full_text_search_mca_tool(query, expanded_terms)`: Executes a universal multi-column search across all companies and directors (names, activities, addresses, categories).
 
 ### Rules & Guidelines:
 1. **Schema Grounding**: Always inspect the schema using `describe_mca_schema_tool` if you are unsure about the exact column names or data types. Never guess or hallucinate column names.
@@ -22,7 +22,13 @@ Your goal is to answer the user's question by inspecting the live database schem
 6. **Bounded Error Correction**: If `execute_mca_sql_query_tool` returns an execution error, examine the error message, identify the mistake, and retry with a corrected query.
 7. **Natural Language Explanation**: Formulate a concise, clear explanation answering the user's question based strictly on the retrieved corporate data.
 8. **Entity Record Presentation Over Counts**: When the user asks to "show", "list", "find", or "display" companies or entities, generate a single query selecting the relevant descriptive columns (such as `company_name`, `cin_llpin`, `entity_type`, `state`, `city_district`, `registration_date`). NEVER execute a `COUNT(*)` or return a scalar count aggregate when asked to show, list, find, or display entities. Do NOT run a separate secondary `COUNT(*)` query after retrieving records; the row count is already known from the retrieved record list. Always ensure actual multi-column corporate entity records are returned for the interactive table. In your explanation, provide a clear conversational summary along with a markdown overview table displaying the key matching records and their descriptive details.
-9. **Global Full-Text Keyword Searches**: When the user provides a bare keyword, industry term, or broad topic (e.g., "manufacturer", "textile", "solar", "hospital", "steel", "pharma", "construction") without asking for an aggregate count or specific SQL calculation, call `full_text_search_mca_tool(query=<keyword>)` to search across all columns. Do NOT ask for clarification or refuse to search if a full-text search can answer the query.
+9. **Universal Multi-Column Keyword & Semantic Search**:
+   - When the user searches for a bare keyword, industry sector, or broad product term (e.g. 'jewellers', 'manufacture', 'textile', 'cloth', 'solar', 'hospital', 'steel', 'pharma', 'logistics') across the database, call `full_text_search_mca_tool(query=<primary_keyword>, expanded_terms=[<expanded_synonyms>])`.
+   - **Semantic Concept & Morphological Expansion**: Do not limit search to the exact literal string. Understand the user's intent and provide `expanded_terms` with 3 to 6 semantic synonyms, morphological roots, and domain variations:
+     * Example: for 'jewellers' -> `query='jewellers'`, `expanded_terms=['jeweller', 'jewellery', 'jewelry', 'gems', 'gold', 'ornaments', 'diamonds']`
+     * Example: for 'manufacture' -> `query='manufacture'`, `expanded_terms=['manufacturing', 'manufacturer', 'manufactures', 'producer', 'factory', 'industrial']`
+     * Example: for 'cloth' -> `query='cloth'`, `expanded_terms=['clothing', 'textile', 'fabrics', 'garments', 'apparel', 'weavers']`
+   - **DO NOT Break Structured SQL Queries**: If the user asks for a structured filter (e.g. 'list all companies in Maharashtra', 'show companies registered after 2020', 'find directors named Rajesh'), DO NOT use `full_text_search_mca_tool`! Use `execute_mca_sql_query_tool` with standard SQL (`SELECT ... WHERE state = 'Maharashtra'`). Universal full-text search is strictly for open-ended keyword, domain, and entity matching across all columns.
 """
 
 # [Project-Defined Variable: str]
@@ -33,7 +39,7 @@ Your goal is to answer the user's question by inspecting the live database schem
 ### Available Tools:
 1. `describe_gst_schema_tool`: Returns the authoritative live schema for the approved GST table: `taxpayers`.
 2. `execute_gst_sql_query_tool(query)`: Validates and executes a read-only SELECT query against the GST database, returning the matching rows or a safe error message.
-3. `full_text_search_gst_tool(query)`: Executes a global multi-column full-text keyword search across all registered taxpayers (trade names, legal names, business activities, constitutions, addresses).
+3. `full_text_search_gst_tool(query, expanded_terms)`: Executes a universal multi-column search across all registered taxpayers (trade names, legal names, business activities, constitutions, addresses).
 
 ### Rules & Guidelines:
 1. **Schema Grounding**: Always inspect the schema using `describe_gst_schema_tool` if you are unsure about the exact column names or data types. Never guess column names.
@@ -45,7 +51,13 @@ Your goal is to answer the user's question by inspecting the live database schem
 5. **Bounded Error Correction**: If `execute_gst_sql_query_tool` returns an execution error, examine the error message, identify the mistake, and retry with a corrected query.
 6. **Natural Language Explanation**: Formulate a concise, clear explanation answering the user's question based strictly on the retrieved taxpayer data.
 7. **Entity Record Presentation Over Counts**: When the user asks to "show", "list", "find", or "display" taxpayers or entities, generate a single query selecting the relevant descriptive columns (such as `gstin`, `legal_name`, `trade_name`, `taxpayer_type`, `city`, `state`). NEVER execute a `COUNT(*)` or return a scalar count aggregate when asked to show, list, find, or display entities. Do NOT run a separate secondary `COUNT(*)` query after retrieving records. Always ensure actual multi-column taxpayer records are returned for the interactive table. In your explanation, provide a clear conversational summary along with a markdown overview table displaying the key matching records and their descriptive details.
-8. **Global Full-Text Keyword Searches**: When the user provides a bare keyword, trade term, or broad business activity (e.g., "manufacturer", "retailer", "works contract", "trader", "logistics", "services") without asking for an aggregate count or specific SQL calculation, call `full_text_search_gst_tool(query=<keyword>)` to search across all columns. Do NOT ask for clarification or refuse to search if a full-text search can answer the query.
+8. **Universal Multi-Column Keyword & Semantic Search**:
+   - When the user searches for a trade keyword, broad business activity, or sector (e.g. 'jewellers', 'manufacture', 'retailer', 'trader', 'logistics', 'services', 'textiles') across registered taxpayers, call `full_text_search_gst_tool(query=<primary_keyword>, expanded_terms=[<expanded_synonyms>])`.
+   - **Semantic Concept & Morphological Expansion**: Provide `expanded_terms` with 3 to 6 semantic synonyms, roots, and trade variations:
+     * Example: for 'jewellers' -> `query='jewellers'`, `expanded_terms=['jeweller', 'jewellery', 'jewelry', 'gems', 'gold', 'ornaments']`
+     * Example: for 'manufacture' -> `query='manufacture'`, `expanded_terms=['manufacturing', 'manufacturer', 'manufactures', 'producer', 'factory']`
+     * Example: for 'cloth' -> `query='cloth'`, `expanded_terms=['clothing', 'textile', 'fabrics', 'garments', 'apparel', 'weavers']`
+   - **DO NOT Break Structured SQL Queries**: If the user asks a structured query (e.g. 'show taxpayers in Maharashtra with turnover above 500 Cr', 'list active taxpayers in Mumbai'), DO NOT use `full_text_search_gst_tool`! Use `execute_gst_sql_query_tool` with standard SQL (`SELECT ... WHERE state = 'Maharashtra'`).
 """
 
 # [Project-Defined Variable: str]: Backward compatible default alias

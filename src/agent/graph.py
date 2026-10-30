@@ -87,6 +87,8 @@ class AgentState(TypedDict):
     max_retries: int
     # [Key: Optional[str]]: Extracted search keyword token for full-text highlighting
     search_term: Optional[str]
+    # [Key: List[str]]: Highlight tokens extracted for universal 'Ctrl + F' search
+    highlight_tokens: List[str]
 
 
 # [Project-Defined Function]: Factory function initializing ChatGoogleGenerativeAI
@@ -285,8 +287,16 @@ def build_agent_graph(
             elif "full_text_search" in tool_name or "search" in tool_name:
                 # [Variable: str]: Extract search query keyword
                 search_query = tool_args.get("query") or tool_args.get("keyword") or tool_args.get("search_term") or ""
-                # [Project-Defined Method: DatabaseToolService.full_text_search]: Execute multi-column FTS5 search
-                execution_dict = tool_service.full_text_search(search_query)
+                # [Variable: Any]: Extract optional LLM-expanded synonyms or variations
+                raw_expanded = tool_args.get("expanded_terms")
+                expanded_terms: Optional[List[str]] = None
+                if isinstance(raw_expanded, list):
+                    expanded_terms = [str(t).strip() for t in raw_expanded if str(t).strip()]
+                elif isinstance(raw_expanded, str) and raw_expanded.strip():
+                    expanded_terms = [t.strip() for t in raw_expanded.split(",") if t.strip()]
+
+                # [Project-Defined Method: DatabaseToolService.full_text_search]: Execute universal multi-column search
+                execution_dict = tool_service.full_text_search(search_query, expanded_terms=expanded_terms)
                 # [Library Function: json.dumps]: Serialize output dict to string
                 result_str = json.dumps(execution_dict, indent=2)
 
@@ -302,11 +312,13 @@ def build_agent_graph(
                     updates["rows"] = new_rows
                     updates["row_count"] = new_count
                     updates["search_term"] = search_query
+                    updates["highlight_tokens"] = execution_dict.get("highlight_tokens", [])
                     updates["status"] = AgentStatus.SUCCESS
                     updates["error_message"] = None
                 else:
                     updates["status"] = AgentStatus.EXECUTION_FAILED
                     updates["error_message"] = execution_dict.get("error", "Full-text search execution failed")
+                    updates["highlight_tokens"] = execution_dict.get("highlight_tokens", [])
 
                 new_tool_messages.append(
                     ToolMessage(content=result_str, tool_call_id=call_id)
@@ -449,6 +461,7 @@ def run_agent(
         "retry_count": 0,
         "max_retries": settings.sql_correction_max_retries,
         "search_term": None,
+        "highlight_tokens": [],
     }
 
     try:
@@ -484,6 +497,7 @@ def run_agent(
             clarification_prompt=clarification_prompt,
             retry_count=final_state.get("retry_count", 0),
             search_term=final_state.get("search_term"),
+            highlight_tokens=final_state.get("highlight_tokens", []),
         )
 
     except Exception as exc:

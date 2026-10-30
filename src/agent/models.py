@@ -92,4 +92,9 @@ class AgentResult(BaseModel):
         default=None,
         description="The search keyword or phrase used for full-text search and result highlighting.",
     )
+    # [Attribute]: List of 'str', unique word tokens and roots identified for whole-word highlighting
+    highlight_tokens: List[str] = Field(
+        default_factory=list,
+        description="List of search keyword tokens, roots, and expanded terms to highlight in results.",
+    )
 

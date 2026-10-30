@@ -125,9 +125,11 @@ def seed_mca_database(
             companies.to_sql('companies', conn, if_exists='replace', index=False)
             directors.to_sql('directors', conn, if_exists='replace', index=False)
 
-            # [Built-in Python: if]: Initialize FTS5 full-text search virtual tables for SQLite
+            # [Built-in Python: if]: Initialize FTS5 full-text search virtual tables for SQLite or FULLTEXT on MySQL
             if str(engine.url).startswith("sqlite"):
                 init_mca_fts_tables(conn)
+            else:
+                init_mysql_search_document(conn, db_type="mca")
 
         # Verification count
         with engine.connect() as conn:
@@ -233,9 +235,11 @@ def seed_gst_database(
         with engine.begin() as conn:
             gst_df.to_sql('taxpayers', conn, if_exists='replace', index=False)
 
-            # [Built-in Python: if]: Initialize FTS5 full-text search virtual tables for SQLite
+            # [Built-in Python: if]: Initialize FTS5 full-text search virtual tables for SQLite or FULLTEXT on MySQL
             if str(engine.url).startswith("sqlite"):
                 init_gst_fts_tables(conn)
+            else:
+                init_mysql_search_document(conn, db_type="gst")
 
         # Verification count
         with engine.connect() as conn:
@@ -252,6 +256,55 @@ def seed_gst_database(
         err_msg = f"Failed to seed GST database: {type(exc).__name__}: {str(exc)}"
         logger.error(err_msg)
         return False, err_msg
+
+
+# [Project-Defined Function]: Initializes MySQL consolidated search_document column and FULLTEXT index
+def init_mysql_search_document(conn: Any, db_type: str = "mca") -> None:
+    """Create consolidated search_document column and FULLTEXT index on MySQL tables."""
+    norm_type = db_type.lower().strip()
+    table_name = "companies" if norm_type == "mca" else "taxpayers"
+
+    try:
+        if norm_type == "mca":
+            conn.execute(text("""
+                ALTER TABLE companies 
+                ADD COLUMN search_document TEXT GENERATED ALWAYS AS (
+                    CONCAT_WS(' ', 
+                        COALESCE(company_name, ''),
+                        COALESCE(cin_llpin, ''),
+                        COALESCE(entity_type, ''),
+                        COALESCE(activity_description, ''),
+                        COALESCE(category, ''),
+                        COALESCE(subcategory, ''),
+                        COALESCE(class, ''),
+                        COALESCE(state, ''),
+                        COALESCE(city_district, ''),
+                        COALESCE(registered_address, '')
+                    )
+                ) STORED;
+            """))
+            conn.execute(text("CREATE FULLTEXT INDEX idx_companies_search_doc ON companies(search_document);"))
+        else:
+            conn.execute(text("""
+                ALTER TABLE taxpayers 
+                ADD COLUMN search_document TEXT GENERATED ALWAYS AS (
+                    CONCAT_WS(' ', 
+                        COALESCE(trade_name, ''),
+                        COALESCE(legal_name, ''),
+                        COALESCE(gstin, ''),
+                        COALESCE(nature_of_business, ''),
+                        COALESCE(constitution, ''),
+                        COALESCE(taxpayer_type, ''),
+                        COALESCE(address, ''),
+                        COALESCE(city, ''),
+                        COALESCE(state, '')
+                    )
+                ) STORED;
+            """))
+            conn.execute(text("CREATE FULLTEXT INDEX idx_taxpayers_search_doc ON taxpayers(search_document);"))
+        logger.info("[%s] Created MySQL search_document and FULLTEXT index on %s.", norm_type.upper(), table_name)
+    except Exception as exc:
+        logger.warning("[%s] MySQL search_document index setup: %s", norm_type.upper(), exc)
 
 
 # [Project-Defined Function]: Initializes SQLite FTS5 virtual table for GST taxpayer data

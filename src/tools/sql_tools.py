@@ -36,6 +36,8 @@ from src.database.schema_inspector import SchemaInspector
 from src.validation.validator import SQLValidator, ValidationResult
 # [Project-Defined Import from src.database.seeder]: SQLite FTS5 table initialization helper
 from src.database.seeder import ensure_fts_tables
+# [Project-Defined Import from src.tools.search_service]: Universal search service across all database columns
+from src.tools.search_service import UniversalSearchService
 
 # [Library Instance: logging.Logger]: Logger for tool operations
 logger = logging.getLogger(__name__)
@@ -207,16 +209,22 @@ class DatabaseToolService:
                 "is_retryable": False,
             }
 
-    # [Project-Defined Method: DatabaseToolService.full_text_search]: Executes global full-text search across all textual columns
-    def full_text_search(self, query: str, limit: int = 50) -> Dict[str, Any]:
-        """Perform a global full-text search across all textual columns for MCA or GST database.
+    # [Project-Defined Method: DatabaseToolService.full_text_search]: Executes universal search across all columns
+    def full_text_search(
+        self,
+        query: str,
+        expanded_terms: Optional[List[str]] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Perform a universal 'Ctrl + F' multi-column search for MCA or GST database.
 
         Args:
-            query: The keyword or phrase to search (e.g. 'manufacturer', 'textile', 'solar', 'hospital').
+            query: The keyword or phrase to search (e.g. 'jewellers', 'manufacture', 'solar').
+            expanded_terms: Optional list of LLM-expanded synonyms, roots, and domain terms.
             limit: Maximum rows to return (bounded by SQL_MAX_ROWS).
 
         Returns:
-            Dictionary matching execute_query schema with status, sql_query, columns, rows, and row_count.
+            Dictionary matching execute_query schema with status, sql_query, columns, rows, row_count, and highlight_tokens.
         """
         # [Built-in Python: str.strip]: Clean input query string
         raw_query = str(query or "").strip()
@@ -228,162 +236,22 @@ class DatabaseToolService:
                 "columns": [],
                 "rows": [],
                 "row_count": 0,
+                "search_term": "",
+                "highlight_tokens": [],
                 "error": None,
             }
 
-        # [Built-in Python: min]: Clamp limit to configured max_rows
-        eff_limit = min(limit, self.settings.sql_max_rows)
-        # [Built-in Python: list comprehension]: Clean tokens to prevent SQLite FTS syntax errors
-        clean_tokens = [tok for tok in "".join(c if c.isalnum() else " " for c in raw_query).split() if tok]
-        if not clean_tokens:
-            clean_tokens = [raw_query.replace("'", "")]
-
-        # [Project-Defined Function]: Derives morphological base root so 'manufacturing', 'manufacturer', 'manufacture' all resolve to 'manufactur'
-        def get_token_stem(t: str) -> str:
-            lower_t = t.lower().strip()
-            for suffix in ("ing", "ers", "er", "ed", "es", "s", "e"):
-                if lower_t.endswith(suffix) and len(lower_t) - len(suffix) >= 4:
-                    return lower_t[:-len(suffix)]
-            return lower_t
-
-        stems = [get_token_stem(tok) for tok in clean_tokens]
-        # Match either exact token prefix or root stem prefix (e.g. '("manufacturing"* OR "manufactur"*)')
-        fts_terms = []
-        for tok, stem in zip(clean_tokens, stems):
-            if stem != tok.lower():
-                fts_terms.append(f'("{tok}"* OR "{stem}"*)')
-            else:
-                fts_terms.append(f'"{tok}"*')
-        # [Variable: str]: FTS5 prefix search expression with stem expansion
-        fts_match_term = " ".join(fts_terms)
-        like_term = f"%{stems[0]}%"
-
-        # Ensure FTS5 tables exist
-        try:
-            ensure_fts_tables(self.engine, db_type=self.db_type)
-        except Exception as fts_init_err:
-            logger.debug("[%s] FTS init error: %s", self.db_type.upper(), fts_init_err)
-
-        if self.db_type == "mca":
-            fts_sql = text("""
-                SELECT 
-                    c.company_name,
-                    c.cin_llpin,
-                    c.entity_type,
-                    c.state,
-                    c.city_district,
-                    c.activity_description,
-                    c.registered_address
-                FROM companies c
-                JOIN companies_fts f ON c.cin_llpin = f.cin_llpin
-                WHERE companies_fts MATCH :match_term
-                LIMIT :limit
-            """)
-            fallback_sql = text("""
-                SELECT 
-                    company_name,
-                    cin_llpin,
-                    entity_type,
-                    state,
-                    city_district,
-                    activity_description,
-                    registered_address
-                FROM companies
-                WHERE company_name LIKE :like_term
-                   OR activity_description LIKE :like_term
-                   OR registered_address LIKE :like_term
-                   OR city_district LIKE :like_term
-                   OR state LIKE :like_term
-                   OR category LIKE :like_term
-                LIMIT :limit
-            """)
-            display_sql = f"SELECT company_name, cin_llpin, entity_type, state, city_district, activity_description FROM companies WHERE companies_fts MATCH '{fts_match_term}' LIMIT {eff_limit};"
-        else:
-            fts_sql = text("""
-                SELECT 
-                    t.gstin,
-                    t.legal_name,
-                    t.trade_name,
-                    t.nature_of_business,
-                    t.constitution,
-                    t.taxpayer_type,
-                    t.city,
-                    t.state
-                FROM taxpayers t
-                JOIN taxpayers_fts f ON t.gstin = f.gstin
-                WHERE taxpayers_fts MATCH :match_term
-                LIMIT :limit
-            """)
-            fallback_sql = text("""
-                SELECT 
-                    gstin,
-                    legal_name,
-                    trade_name,
-                    nature_of_business,
-                    constitution,
-                    taxpayer_type,
-                    city,
-                    state
-                FROM taxpayers
-                WHERE trade_name LIKE :like_term
-                   OR legal_name LIKE :like_term
-                   OR nature_of_business LIKE :like_term
-                   OR address LIKE :like_term
-                   OR city LIKE :like_term
-                   OR state LIKE :like_term
-                LIMIT :limit
-            """)
-            display_sql = f"SELECT gstin, legal_name, trade_name, nature_of_business, city, state FROM taxpayers WHERE taxpayers_fts MATCH '{fts_match_term}' LIMIT {eff_limit};"
-
-        try:
-            with self.engine.connect() as conn:
-                try:
-                    result = conn.execute(fts_sql, {"match_term": fts_match_term, "limit": eff_limit})
-                    cols = list(result.keys())
-                    raw_rows = result.fetchall()
-                except Exception as fts_run_err:
-                    logger.info("[%s] FTS query failed, attempting multi-column LIKE fallback: %s", self.db_type.upper(), fts_run_err)
-                    result = conn.execute(fallback_sql, {"like_term": like_term, "limit": eff_limit})
-                    cols = list(result.keys())
-                    raw_rows = result.fetchall()
-                    display_sql = f"-- Full-Text Search fallback:\n{fallback_sql}"
-
-                rows_data = [
-                    {col: serialize_cell_value(val) for col, val in zip(cols, row)}
-                    for row in raw_rows
-                ]
-
-                logger.info(
-                    "[%s] Full-text search for '%s' returned %d rows with %d columns.",
-                    self.db_type.upper(),
-                    raw_query,
-                    len(rows_data),
-                    len(cols),
-                )
-
-                return {
-                    "success": True,
-                    "status": "success",
-                    "sql_query": display_sql,
-                    "columns": cols,
-                    "rows": rows_data,
-                    "row_count": len(rows_data),
-                    "search_term": raw_query,
-                    "error": None,
-                }
-
-        except Exception as exc:
-            err_msg = f"Full-text search error: {type(exc).__name__}: {str(exc)}"
-            logger.error("[%s] %s", self.db_type.upper(), err_msg)
-            return {
-                "success": False,
-                "status": "execution_failed",
-                "sql_query": display_sql,
-                "columns": [],
-                "rows": [],
-                "row_count": 0,
-                "error": err_msg,
-            }
+        # [Project-Defined Class: UniversalSearchService]: Instantiate universal search engine
+        search_service = UniversalSearchService(
+            engine=self.engine,
+            db_type=self.db_type,
+            settings=self.settings,
+        )
+        return search_service.execute_search(
+            query=raw_query,
+            expanded_terms=expanded_terms,
+            limit=limit,
+        )
 
 
 # [Project-Defined Global Variable: Dict[str, DatabaseToolService]]: Cached singleton services keyed by db_type
@@ -452,21 +320,23 @@ def execute_mca_sql_query_tool(query: str) -> str:
 
 # [Library Decorator: langchain_core.tools.tool]: Converts function into tool callable by Gemini LLM for MCA FTS
 @tool
-def full_text_search_mca_tool(query: str) -> str:
+def full_text_search_mca_tool(query: str, expanded_terms: Optional[List[str]] = None) -> str:
     """Execute a global multi-column full-text keyword search across all MCA companies and directors.
 
-    Call this tool whenever the user provides a keyword, industry term, or broad topic (e.g. 'manufacturer',
-    'textile', 'solar', 'hospital', 'steel', 'pharma', 'construction') to find matching companies across
-    all textual columns (names, activities, addresses, categories).
+    Call this tool whenever the user provides a keyword, industry term, or broad topic (e.g. 'jewellers',
+    'manufacturer', 'textile', 'solar', 'hospital', 'steel', 'pharma', 'construction') to find matching companies
+    across all textual columns.
 
     Args:
-        query: The keyword, industry name, or search phrase to find across all columns.
+        query: The primary search term or keyword from the user (e.g. 'jewellers').
+        expanded_terms: Optional list of semantically expanded keywords, morphological variants,
+                        and domain synonyms generated by the LLM (e.g. ['jeweller', 'jewellery', 'jewelry', 'gems', 'gold', 'ornaments']).
 
     Returns:
         JSON string containing the matching corporate entity records.
     """
     service = get_mca_tool_service()
-    result = service.full_text_search(query)
+    result = service.full_text_search(query=query, expanded_terms=expanded_terms)
     return json.dumps(result, indent=2)
 
 
@@ -501,21 +371,23 @@ def execute_gst_sql_query_tool(query: str) -> str:
 
 # [Library Decorator: langchain_core.tools.tool]: Converts function into tool callable by Gemini LLM for GST FTS
 @tool
-def full_text_search_gst_tool(query: str) -> str:
+def full_text_search_gst_tool(query: str, expanded_terms: Optional[List[str]] = None) -> str:
     """Execute a global multi-column full-text keyword search across all GST taxpayers.
 
-    Call this tool whenever the user provides a keyword, trade term, or broad business activity (e.g. 'manufacturer',
-    'retailer', 'works contract', 'trader', 'logistics', 'services') to find matching taxpayers across
-    all textual columns (trade names, legal names, nature of business, constitution, addresses).
+    Call this tool whenever the user provides a keyword, trade term, or broad business activity (e.g. 'jewellers',
+    'manufacturer', 'retailer', 'works contract', 'trader', 'logistics', 'services') to find matching taxpayers
+    across all textual columns.
 
     Args:
-        query: The keyword, trade name, or business category to find across all columns.
+        query: The primary keyword, trade name, or business category from the user (e.g. 'jewellers').
+        expanded_terms: Optional list of semantically expanded keywords, morphological variants,
+                        and domain synonyms generated by the LLM (e.g. ['jeweller', 'jewellery', 'jewelry', 'gems', 'gold', 'ornaments']).
 
     Returns:
         JSON string containing the matching registered taxpayer records.
     """
     service = get_gst_tool_service()
-    result = service.full_text_search(query)
+    result = service.full_text_search(query=query, expanded_terms=expanded_terms)
     return json.dumps(result, indent=2)
 
 
