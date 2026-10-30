@@ -456,17 +456,6 @@ def render_header():
 # [Project-Defined Function]: Extracts search keyword tokens and word roots strictly during FTS keyword search
 def get_search_tokens(result: AgentResult) -> List[str]:
     """Extract cleaned search keyword tokens and word roots ONLY when a full-text search (FTS) is active."""
-    # Check if explicit highlight_tokens are already provided on result
-    explicit_tokens = getattr(result, "highlight_tokens", None)
-    if explicit_tokens and isinstance(explicit_tokens, list) and len(explicit_tokens) > 0:
-        cleaned_list: List[str] = []
-        for t in explicit_tokens:
-            t_str = str(t).strip().lower()
-            if len(t_str) >= 2 and t_str not in cleaned_list:
-                cleaned_list.append(t_str)
-        if cleaned_list:
-            return cleaned_list
-
     # [Built-in Python: Optional[str]]: Detect FTS candidate keyword
     fts_candidate: Optional[str] = getattr(result, "search_term", None)
 
@@ -474,19 +463,7 @@ def get_search_tokens(result: AgentResult) -> List[str]:
     if not fts_candidate and result.sql_query:
         # Strictly verify that an FTS MATCH statement was executed
         if re.search(r'\b(?:MATCH|_fts)\b', result.sql_query, flags=re.IGNORECASE):
-            # Extract MySQL AGAINST clause content: AGAINST('...' IN BOOLEAN MODE)
-            against_matches = re.findall(r"AGAINST\s*\(\s*['\"](.*?)['\"]\s*IN\s+BOOLEAN\s+MODE\s*\)", result.sql_query, flags=re.IGNORECASE)
-            if against_matches:
-                raw_against = against_matches[0]
-                tokens_from_against = [
-                    re.sub(r'[*+<>~"()]', '', w).strip().lower()
-                    for w in raw_against.split()
-                ]
-                clean_against = [t for t in tokens_from_against if len(t) >= 2]
-                if clean_against:
-                    return clean_against
-
-            # [Library Function: re.findall]: Extract FTS MATCH clause content (e.g., SQLite FTS5)
+            # [Library Function: re.findall]: Extract FTS MATCH clause content
             match_fts = re.findall(r'MATCH\s+[\'"](.*?)[\'"]', result.sql_query, flags=re.IGNORECASE)
             for m in match_fts:
                 # Strip wildcards, quotes, boolean operators, and parentheses from FTS expression
@@ -627,13 +604,8 @@ def render_result(result: AgentResult, label: str = "", scope: str = "main"):
     if result.status == AgentStatus.SUCCESS:
         search_pill_html = ""
         matched_term = getattr(result, "search_term", None)
-        tokens = getattr(result, "highlight_tokens", [])
         if matched_term:
-            display_terms = f'"{matched_term}"'
-            if tokens and len(tokens) > 1:
-                synonyms_display = ", ".join(tokens[1:6])
-                display_terms += f' <span style="color: #94a3b8; font-weight: 400; font-size: 11px;">(+ {synonyms_display})</span>'
-            search_pill_html = f'<div class="metric-pill keyword-pill">🔍 Semantic Search: <span style="color: #fde047; font-weight: 700;">{display_terms}</span></div>'
+            search_pill_html = f'<div class="metric-pill keyword-pill">🔍 Highlighted Keyword: <span style="color: #fde047; font-weight: 700;">"{matched_term}"</span></div>'
         st.markdown(
             f"""
             <div class="metric-container">
@@ -662,7 +634,7 @@ def render_result(result: AgentResult, label: str = "", scope: str = "main"):
 
         if search_tokens:
             highlight_label = getattr(result, "search_term", None) or search_tokens[0]
-            st.caption(f"✨ Universal 'Ctrl + F' matches for **'{highlight_label}'** and related synonyms highlighted in table below.")
+            st.caption(f"✨ Matching keyword: **'{highlight_label}'** highlighted in table below.")
 
             # Render HTML table with word-level highlight (highlighting ONLY the matching words, not the whole cell)
             table_html = render_highlighted_table_html(df, search_tokens)
@@ -774,25 +746,25 @@ def main():
 
     # Pre-configure example queries for MCA corporate data returning rich entity records
     mca_examples = [
-        ("💎 Jewellers & Gems", "jewellers"),
-        ("🏭 Manufacturing", "manufacture"),
         ("📍 Andhra Pradesh Companies", "List all companies registered in Andhra Pradesh with their company name, CIN, and city."),
+        ("💰 Highest Authorized Capital", "Show the top 5 companies with the highest authorized capital. Display company name, CIN, and authorized capital."),
+        ("👥 Directors of YRC PROJECTS", "Find all directors for 'YRC PROJECTS INDIA PRIVATE LIMITED'. Show director name, designation, and DIN."),
         ("🏢 Maharashtra Companies", "List registered companies in Maharashtra with their company name, CIN, and registration date."),
     ]
 
     # Pre-configure example queries for GST taxpayer data returning rich entity records
     gst_examples = [
-        ("💎 Jewellers & Gold", "jewellers"),
-        ("🏭 Manufacturing Sector", "manufacture"),
         ("✅ Active Taxpayers", "List all active taxpayers with status 'ACT' or 'Active'. Show GSTIN, legal name, and state limit 10."),
         ("📍 Delhi Taxpayers", "Find taxpayers located in Delhi with their legal name, trade name, and GSTIN."),
+        ("📈 Turnover Slab 0-40L", "Show taxpayers who have the turnover slab 'Rs. 0 to 40 lakhs' with their trade name, legal name, and state limit 10."),
+        ("🔍 Lookup GSTIN 35AMMPP5720A2Z8", "Show full details for taxpayer with GSTIN '35AMMPP5720A2Z8'."),
     ]
 
     # Pre-configure example queries for Unified Dual Search returning records from both databases
     dual_examples = [
-        ("💎 Search 'jewellers' (Both DBs)", "jewellers"),
-        ("🏭 Search 'manufacture' (Both DBs)", "manufacture"),
         ("📍 Maharashtra Entities", "Show companies and taxpayers registered in Maharashtra with their names and identification numbers."),
+        ("🏛️ Andhra Pradesh Registrations", "List registered companies and taxpayers in Andhra Pradesh."),
+        ("🏢 Active Business Overview", "Show active companies and taxpayers registered in 2026."),
     ]
 
     # Tabs for Dual-Agent Search
