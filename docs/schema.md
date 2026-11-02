@@ -1,108 +1,94 @@
-# E-Commerce Database Schema Documentation
+# MCA & GST Database Schema Documentation
 
-This document describes the schema structure, data types, constraints, and business semantics of the local MySQL e-commerce database used by the LangGraph SQL Agent.
-
-## Overview of Approved Tables
-
-Only the following four tables are permitted for query generation and execution:
-1. `customers`
-2. `products`
-3. `orders`
-4. `order_items`
-
-Any attempt to query tables outside this list is rejected by the SQL validation policy before database execution.
+This document describes the schema structure, data types, constraints, and relationships for the **Ministry of Corporate Affairs (MCA)** and **Goods & Services Tax (GST)** databases used by the LangGraph SQL Agents.
 
 ---
 
-## 1. `customers` Table
+## Architecture Overview
 
-Stores registered customer accounts and geographical location.
+The system operates across two separate, authoritative databases:
+1. **MCA Database (`mca_db`)**: Manages registered Indian corporate entities and their directors.
+2. **GST Database (`gst_db`)**: Manages registered taxpayers, turnover slabs, trade names, and taxpayer compliance states.
+
+---
+
+## 🏛️ Part 1: MCA Corporate Database
+
+### 1. `companies` Table
+Stores official corporate registrations from the Ministry of Corporate Affairs.
 
 | Column | Data Type | Nullable | Key | Description |
 |---|---|---|---|---|
-| `customer_id` | `INT` | No | PK (Auto-increment) | Unique customer identifier |
-| `first_name` | `VARCHAR(50)` | No | | Customer given name |
-| `last_name` | `VARCHAR(50)` | No | | Customer family/surname |
-| `email` | `VARCHAR(100)` | No | Unique | Primary email address |
-| `city` | `VARCHAR(50)` | No | Index | City of residence (e.g., 'New York', 'Chicago') |
-| `state` | `VARCHAR(50)` | No | | State or province code (e.g., 'NY', 'CA', 'TX') |
-| `created_at` | `TIMESTAMP` | Yes | | Timestamp when customer account was registered |
+| `cin_llpin` | `VARCHAR(21)` | No | PK | Corporate Identification Number (CIN) or LLPIN |
+| `company_name` | `VARCHAR(200)` | No | Index | Registered legal name of the entity |
+| `entity_type` | `VARCHAR(50)` | Yes | | Type of entity (e.g., 'Company', 'LLP') |
+| `registration_date` | `DATE / VARCHAR` | Yes | | Date of incorporation |
+| `state` | `VARCHAR(100)` | Yes | Index | State where registered office is located |
+| `city_district` | `VARCHAR(100)` | Yes | | District / city location |
+| `pincode` | `VARCHAR(10)` | Yes | | Postal PIN code |
+| `roc` | `VARCHAR(50)` | Yes | | Registrar of Companies office jurisdiction |
+| `activity_code` | `VARCHAR(20)` | Yes | | Industrial / business activity classification code |
+| `activity_description`| `TEXT` | Yes | | Description of corporate business activities |
+| `class` | `VARCHAR(50)` | Yes | | Class of company (e.g., 'Private', 'Public') |
+| `category` | `VARCHAR(100)` | Yes | | Category of company |
+| `subcategory` | `VARCHAR(100)` | Yes | | Subcategory of company |
+| `authorized_capital` | `BIGINT / DECIMAL` | Yes | Index | Total authorized share capital in INR |
+| `paid_up_capital` | `BIGINT / DECIMAL` | Yes | | Paid-up share capital in INR |
+| `registered_address` | `TEXT` | Yes | | Complete official registered postal address |
+| `search_document` | `TEXT` | Yes | FULLTEXT | Consolidated virtual document for multi-column search |
 
 ---
 
-## 2. `products` Table
-
-Stores product catalog items, categories, pricing, and stock inventory.
+### 2. `directors` Table
+Stores appointed directors and designated partners associated with registered entities.
 
 | Column | Data Type | Nullable | Key | Description |
 |---|---|---|---|---|
-| `product_id` | `INT` | No | PK (Auto-increment) | Unique product identifier |
-| `product_name` | `VARCHAR(100)` | No | | Full product title |
-| `category` | `VARCHAR(50)` | No | Index | Category name ('Electronics', 'Clothing', 'Home & Kitchen', 'Books', 'Sports') |
-| `price` | `DECIMAL(10,2)` | No | Index | Current retail unit price |
-| `stock_quantity` | `INT` | No | | Units remaining in inventory |
-| `created_at` | `TIMESTAMP` | Yes | | Timestamp when product was added to catalog |
+| `din` | `VARCHAR(10)` | No | PK | Director Identification Number (DIN) |
+| `cin_llpin` | `VARCHAR(21)` | No | FK | Reference to parent entity in `companies` |
+| `director_name` | `VARCHAR(150)` | No | Index | Full legal name of the director |
+| `designation` | `VARCHAR(80)` | Yes | | Role (e.g., 'Director', 'Managing Director') |
+| `director_dob` | `DATE / VARCHAR` | Yes | | Date of birth |
+| `gender` | `VARCHAR(20)` | Yes | | Gender classification |
+| `director_email` | `VARCHAR(120)` | Yes | | Official registered email contact |
+| `director_mobile` | `VARCHAR(20)` | Yes | | Official registered mobile contact |
+
+#### Foreign Key Relationship
+- `directors.cin_llpin` $\rightarrow$ `companies.cin_llpin`
 
 ---
 
-## 3. `orders` Table
+## 🧾 Part 2: GST Taxpayer Database
 
-Stores purchase orders placed by customers.
+### 3. `taxpayers` Table
+Stores Goods and Services Tax (GST) registered entities and taxpayers across India.
 
 | Column | Data Type | Nullable | Key | Description |
 |---|---|---|---|---|
-| `order_id` | `INT` | No | PK (Auto-increment) | Unique order identifier |
-| `customer_id` | `INT` | No | FK (customers) | ID of the customer who placed the order |
-| `order_date` | `DATETIME` | No | Index | Timestamp when the order was placed |
-| `status` | `VARCHAR(20)` | No | Index | Order status: 'Completed', 'Shipped', 'Pending', 'Cancelled' |
-| `total_amount` | `DECIMAL(10,2)` | No | | Total financial value of the order |
-
-### Foreign Keys
-- `fk_orders_customer`: `orders.customer_id` references `customers.customer_id` (`ON DELETE RESTRICT ON UPDATE CASCADE`)
-
----
-
-## 4. `order_items` Table
-
-Line items linking products to orders with quantity and pricing at time of purchase.
-
-| Column | Data Type | Nullable | Key | Description |
-|---|---|---|---|---|
-| `order_item_id` | `INT` | No | PK (Auto-increment) | Unique line item identifier |
-| `order_id` | `INT` | No | FK (orders) | Reference to parent order |
-| `product_id` | `INT` | No | FK (products) | Reference to purchased product |
-| `quantity` | `INT` | No | | Number of units purchased |
-| `unit_price` | `DECIMAL(10,2)` | No | | Unit price charged at time of order |
-| `subtotal` | `DECIMAL(10,2)` | No | | Line total: `quantity * unit_price` |
-
-### Foreign Keys
-- `fk_items_order`: `order_items.order_id` references `orders.order_id` (`ON DELETE CASCADE ON UPDATE CASCADE`)
-- `fk_items_product`: `order_items.product_id` references `products.product_id` (`ON DELETE RESTRICT ON UPDATE CASCADE`)
+| `gstin` | `VARCHAR(15)` | No | PK | 15-digit Goods and Services Tax Identification Number |
+| `legal_name` | `VARCHAR(200)` | No | Index | Formal legal entity name |
+| `trade_name` | `VARCHAR(200)` | Yes | Index | Commercial operating trade brand name |
+| `constitution` | `VARCHAR(100)` | Yes | | Constitution of business (e.g., 'Private Limited', 'Partnership') |
+| `taxpayer_type` | `VARCHAR(50)` | Yes | | Taxpayer classification (e.g., 'Regular', 'Composition') |
+| `nature_of_business` | `TEXT` | Yes | | Primary and secondary business activities |
+| `turnover_slab` | `VARCHAR(50)` | Yes | Index | Annual turnover slab category (e.g., 'Rs. 0 to 40 lakhs', '500+ Cr') |
+| `turnover_fy` | `VARCHAR(20)` | Yes | | Financial year associated with the turnover slab |
+| `registration_date` | `DATE / VARCHAR` | Yes | | Date of GST registration |
+| `status` | `VARCHAR(50)` | Yes | Index | Taxpayer status (e.g., 'Active', 'ACT', 'Cancelled') |
+| `pan` | `VARCHAR(10)` | Yes | Index | 10-digit Permanent Account Number derived from GSTIN |
+| `mobile` | `VARCHAR(20)` | Yes | | Registered taxpayer phone |
+| `email` | `VARCHAR(120)` | Yes | | Registered taxpayer email |
+| `address` | `TEXT` | Yes | | Principal place of business address |
+| `city` | `VARCHAR(100)` | Yes | Index | Principal city location |
+| `state` | `VARCHAR(100)` | Yes | Index | State of registration |
+| `search_document` | `TEXT` | Yes | FULLTEXT | Consolidated virtual document for multi-column search |
 
 ---
 
-## Common Join Patterns
+## 🔒 Security & Table Allowlist
 
-1. **Customer Orders**:
-   ```sql
-   SELECT c.first_name, c.last_name, o.order_id, o.order_date, o.total_amount
-   FROM customers c
-   JOIN orders o ON c.customer_id = o.customer_id;
-   ```
+The AST validator ([`src/validation/validator.py`](file:///c:/Users/Admin/Desktop/langgraph-sql-agent/src/validation/validator.py)) enforces a strict allowlist:
+- **MCA Agent**: Authorized to access `companies` and `directors`.
+- **GST Agent**: Authorized to access `taxpayers`.
 
-2. **Order Details with Product Names**:
-   ```sql
-   SELECT o.order_id, p.product_name, oi.quantity, oi.unit_price, oi.subtotal
-   FROM orders o
-   JOIN order_items oi ON o.order_id = oi.order_id
-   JOIN products p ON oi.product_id = p.product_id;
-   ```
-
-3. **Total Sales Revenue by Product Category**:
-   ```sql
-   SELECT p.category, SUM(oi.subtotal) AS total_revenue
-   FROM order_items oi
-   JOIN products p ON oi.product_id = p.product_id
-   GROUP BY p.category
-   ORDER BY total_revenue DESC;
-   ```
+Any SQL query attempting to access tables outside these authorized sets is rejected before execution.
